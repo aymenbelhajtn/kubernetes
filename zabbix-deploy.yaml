@@ -1,0 +1,156 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zabbix
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: zabbix
+spec:
+  ports:
+    - port: 5432
+  selector:
+    app: postgres
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          env:
+            - name: POSTGRES_USER
+              value: zabbix
+            - name: POSTGRES_PASSWORD
+              value: zabbix
+            - name: POSTGRES_DB
+              value: zabbix
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          hostPath:
+            path: /data/zabbix/postgres
+            type: DirectoryOrCreate
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: zabbix-server
+  namespace: zabbix
+spec:
+  ports:
+    - port: 10051
+  selector:
+    app: zabbix-server
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zabbix-server
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zabbix-server
+  template:
+    metadata:
+      labels:
+        app: zabbix-server
+    spec:
+      containers:
+        - name: server
+          image: zabbix/zabbix-server-pgsql:trunk-ubuntu
+          env:
+            - name: DB_SERVER_HOST
+              value: postgres
+            - name: POSTGRES_USER
+              value: zabbix
+            - name: POSTGRES_PASSWORD
+              value: zabbix
+            - name: POSTGRES_DB
+              value: zabbix
+          volumeMounts:
+            - name: srvdata
+              mountPath: /var/lib/zabbix
+      volumes:
+        - name: srvdata
+          hostPath:
+            path: /data/zabbix/server
+            type: DirectoryOrCreate
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: zabbix-frontend
+  namespace: zabbix
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      nodePort: 30050
+      targetPort: 80
+  selector:
+    app: zabbix-frontend
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zabbix-frontend
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zabbix-frontend
+  template:
+    metadata:
+      labels:
+        app: zabbix-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: zabbix/zabbix-web-apache-pgsql:7.4.8-ubuntu
+          env:
+            - name: ZBX_SERVER_HOST
+              value: zabbix-server
+            - name: DB_SERVER_HOST
+              value: postgres
+            - name: POSTGRES_USER
+              value: zabbix
+            - name: POSTGRES_PASSWORD
+              value: zabbix
+            - name: POSTGRES_DB
+              value: zabbix
+            - name: PHP_TZ
+              value: Europe/Paris
+          ports:
+            - containerPort: 80

@@ -1,0 +1,20 @@
+vote:
+  image: dockersamples/examplevotingapp_vote
+  tag: latest
+
+result:
+  image: dockersamples/examplevotingapp_result
+  tag: latest
+
+worker:
+  image: dockersamples/examplevotingapp_worker
+  tag: latest
+
+redis:
+  image: redis
+  tag: latest
+
+db:
+  image: postgres
+  tag: 14
+  password: postgres

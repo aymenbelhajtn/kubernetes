@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ocs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-ocs
+  namespace: ocs
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+  selector:
+    app: mariadb-ocs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-ocs
+  namespace: ocs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb-ocs
+  template:
+    metadata:
+      labels:
+        app: mariadb-ocs
+    spec:
+      containers:
+        - name: mariadb
+          image: mariadb:10.6
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root@123"
+            - name: MYSQL_DATABASE
+              value: "ocsdb"
+            - name: MYSQL_USER
+              value: "ocs"
+            - name: MYSQL_PASSWORD
+              value: "ocs@123"
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mariadb-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mariadb-data
+          hostPath:
+            path: /data/nginx/ocs-mariadb
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ocs-server
+  namespace: ocs
+spec:
+  type: NodePort
+  selector:
+    app: ocs-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30100    # ★ NodePort demandé
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocs-server
+  namespace: ocs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocs-server
+  template:
+    metadata:
+      labels:
+        app: ocs-server
+    spec:
+      # 1) Seed du code OCS dans le volume AVANT le démarrage d’Apache
+      initContainers:
+        - name: seed-www
+          image: ocsinventory/ocsinventory-docker-image:2.12.3
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              set -e
+              echo "[seed-www] Prepare /mnt/www (hostPath)..." ;
+              mkdir -p /mnt/www ;
+              # Si le volume paraît vide, on copie le code d'OCS depuis l'image
+              if [ ! -e /mnt/www/index.php ] && [ ! -e /mnt/www/ocsreports/index.php ]; then
+                echo "[seed-www] Seeding OCS web files into /mnt/www ..." ;
+                cp -a /usr/share/ocsinventory-reports/* /mnt/www/ ;
+              else
+                echo "[seed-www] /mnt/www already initialized, skipping copy." ;
+              fi
+              # Droits permissifs pour éviter les soucis UID entre WSL/KIND
+              chown -R 33:33 /mnt/www || true
+              chmod -R 775 /mnt/www || true
+          volumeMounts:
+            - name: ocs-www
+              mountPath: /mnt/www    # ← le hostPath est monté ICI pendant l'init (pas sur /usr/share)
+        - name: init-perms
+          image: busybox:1.36
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              echo "[init-perms] Prepare /mnt/etc and /mnt/var ..." ;
+              mkdir -p /mnt/etc /mnt/var ;
+              chown -R 33:33 /mnt/etc /mnt/var || true ;
+              chmod -R 777 /mnt/etc /mnt/var || true ;
+          volumeMounts:
+            - { name: ocs-etc, mountPath: /mnt/etc }
+            - { name: ocs-var, mountPath: /mnt/var }
+
+      # 2) Conteneur principal OCS
+      containers:
+        - name: ocs
+          image: ocsinventory/ocsinventory-docker-image:2.12.3
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: OCS_DB_HOST, value: "mariadb-ocs" }
+            - { name: OCS_DB_PORT, value: "3306" }
+            - { name: OCS_DB_NAME, value: "ocsdb" }
+            - { name: OCS_DB_USER, value: "ocs" }
+            - { name: OCS_DB_PASS, value: "ocs@123" }
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            # On consomme le volume seedé par l'init
+            - { name: ocs-www, mountPath: /usr/share/ocsinventory-reports }
+            - { name: ocs-etc, mountPath: /etc/ocsinventory-server }
+            - { name: ocs-var, mountPath: /var/lib/ocsinventory-reports }
+
+      # 3) Définition des volumes hostPath (vus par les pods en /data/nginx)
+      volumes:
+        - name: ocs-www
+          hostPath:
+            path: /data/nginx/ocs/www
+            type: DirectoryOrCreate
+        - name: ocs-etc
+          hostPath:
+            path: /data/nginx/ocs/etc
+            type: DirectoryOrCreate
+        - name: ocs-var
+          hostPath:
+            path: /data/nginx/ocs/var
+            type: DirectoryOrCreate

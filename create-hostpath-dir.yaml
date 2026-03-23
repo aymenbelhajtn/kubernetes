@@ -1,0 +1,30 @@
+# create-hostpath-dir.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: prepare-hostpath
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: prepare-hostpath
+  template:
+    metadata:
+      labels:
+        app: prepare-hostpath
+    spec:
+      hostPID: true
+      containers:
+      - name: mkdir
+        image: busybox
+        command: ["/bin/sh","-c","mkdir -p /data/nginx && sleep 3600"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: hostpath
+          mountPath: /data
+      volumes:
+      - name: hostpath
+        hostPath:
+          path: /var/local   # racine côté nœud ; /var/local/nginx sera créé
+          type: DirectoryOrCreate
